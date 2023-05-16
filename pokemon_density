@@ -1,0 +1,178 @@
+#! /usr/bin/env python3
+
+
+"""
+COMP3311
+23T1
+Assignment 2
+Pokemon Database
+
+Written by: <YOUR NAME HERE> <YOUR STUDENT ID HERE>
+Written on: <DATE HERE>
+
+Pokemon Density
+
+Find the density of pokemon in each location within a given region.
+"""
+
+
+import sys
+import psycopg2
+import helpers
+
+
+### Constants
+USAGE = f"Usage: {sys.argv[0]} <Region>"
+
+
+### Globals
+db = None
+Region = None
+
+
+### Command-line args
+if len(sys.argv) != 2:
+    print(USAGE, file=sys.stderr)
+    sys.exit(1)
+Region = helpers.clean(sys.argv[1])
+
+
+def main():
+    # TODO: YOUR CODE HERE
+    curr = db.cursor()
+
+    # Query to get all possible region values and store in list to check if our input is valid
+    checkQry = 'select distinct region from games'
+    
+    # List to store our possible regions
+    checkres = []
+
+    curr.execute(checkQry, [Region])
+    
+    # Loop to store our possible regions in list 
+    for t in curr.fetchall():
+        checkres.append(t[0])
+
+    # Check if our Region input is Valid
+    if (Region not in checkres):
+        print(f"\n'{Region}' isn't a region in the Pokemon series.", file=sys.stderr)
+        return
+
+    # Query to go through our helper view and get values within our desired region
+    Qry = 'Select * from density_help where region = %s :: regions'
+
+    curr.execute(Qry,[Region])
+
+    # temp list to store values that have none values in tuple
+    no_poke_name = []
+    
+    # list to store values that can be used to calculate densities
+    yes_poke = []
+
+    # list to store just names of locations that have pokemon that we can calculate densities with
+    yes_poke_name = []
+    
+    # List storing our final density outputs
+    density_list = []
+
+    # List to store our different sum densities in diff games
+    sum_games = []
+
+    # list to store distinct values of locations that will have a density output
+    yes_out = []
+
+    # List to store densities for output in descending order
+    final_dens = []
+    
+    # List to store corresponding location name for densities in final_dens
+    final_out = []
+
+    # Initialising our previous tuple to track what we need to do with our summed density
+    prev = (0,)
+
+    # Variables initialised to 0 to prevent errors in code, used to calculate density
+    volume = 0
+    density = 0
+    scaledDens = 0
+    result = 0
+
+    # Loop to separate entire query into tuples containing None values and tuples containing usable values
+    for t in curr.fetchall():
+        if (t[3] is None):
+            no_poke_name.append(t[0])
+        else:
+            yes_poke_name.append(t[0])
+            yes_poke.append(t)
+        
+    # Used to remove duplicates of same location name, making it distinct
+    [yes_out.append(x) for x in yes_poke_name if x not in yes_out]
+
+    # Loop where we go through list of usable tuples and calculate corresponding densities
+    for t,v in enumerate(yes_poke):
+        
+        #condition accounting for first tuple where there is no prev
+        if (t == 0):
+            result += helpers.calc_scaleDens(v[4],v[3],v[5])
+
+        # Condtion accounting for when the same location and same game
+        elif (v[0] == prev[0] and v[1] == prev[1]):
+            result += helpers.calc_scaleDens(v[4],v[3],v[5])
+
+        # Condtion accounting for when same location but diff game
+        elif (v[0] == prev[0] and v[1] != prev[1]):
+            sum_games.append(result)
+            result = helpers.calc_scaleDens(v[4],v[3],v[5])
+
+        # Condition accounting for when diff location
+        else:
+            sum_games.append(result)
+            density_list.append(round(sum(sum_games)/len(sum_games),4))
+            sum_games = []
+            result = helpers.calc_scaleDens(v[4],v[3],v[5])
+        
+        # Condition for end of iterable tuples
+        if(t == len(yes_poke)-1):
+            sum_games.append(result)
+            density_list.append(round(sum(sum_games)/len(sum_games),4))
+        prev = v
+
+
+    # Loop used to create our two lists that will assist in outputting values in correct order
+    while (len(density_list) != 0):
+        max_val = max(density_list)
+        final_out.append(yes_out.pop(density_list.index(max_val)))
+        final_dens.append(max_val)
+        density_list.remove(max_val)
+
+    # Variable used to calculate alignment width of our location name
+    alignVal = len(max(final_out,key=len))
+    
+    # Format and printing of our output
+    print(f"\nThe average density of Pokemon within each location in the '{Region}' region:\n")
+    while (len(final_dens) != 0):
+        location_name = final_out.pop(0)
+        value_out = final_dens.pop(0)
+        print(f"\t{location_name + ':': <{alignVal + 2}}", end = '')
+        print("%.4f" % value_out)
+    
+    res = list(dict.fromkeys([i for i in no_poke_name if i not in yes_poke_name]))
+    print(f"\nThe following locations in the '{Region}' region have no wild Pokemon encounters:\n")
+    for t in res:
+        print(f"\t{t}")
+    db.close()
+    ...
+
+
+if __name__ == '__main__':
+    try:
+        db = psycopg2.connect(dbname="ass2")
+        main()
+    except psycopg2.Error as err:
+        print("DB error: ", err)
+    except Exception as err:
+        print("Internal Error: ", err)
+        raise err
+    finally:
+        if db is not None:
+            db.close()
+    sys.exit(0)

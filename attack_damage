@@ -1,0 +1,224 @@
+#! /usr/bin/env python3
+
+
+"""
+COMP3311
+23T1
+Assignment 2
+Pokemon Database
+
+Written by: <YOUR NAME HERE> <YOUR STUDENT ID HERE>
+Written on: <DATE HERE>
+
+Attack Damage
+
+Given the name of an attacking, and a defending pokemon along with the name of a game in the Pokemon series,
+display a list, ordered from lowest to highest damage,
+of all the moves the attacking pokemon could use on the defending pokemon in the given game.
+"""
+
+
+import sys
+import psycopg2
+import helpers
+from math import trunc
+
+
+### Constants
+USAGE = f"Usage: {sys.argv[0]} <Attacking Pokemon Name> <Defending Pokemon Name> <Pokemon Game Name>"
+
+
+### Globals
+db = None
+Attacking_Pokemon_Name = None
+Defending_Pokemon_Name = None
+Pokemon_Game_Name      = None
+
+
+### Command-line args
+if len(sys.argv) != 4:
+    print(USAGE, file=sys.stderr)
+    sys.exit(1)
+Attacking_Pokemon_Name = helpers.clean(sys.argv[1])
+Defending_Pokemon_Name = helpers.clean(sys.argv[2])
+Pokemon_Game_Name      = helpers.clean(sys.argv[3])
+
+
+def main():
+    
+    curr = db.cursor()
+    
+    # Variables
+    # List to store possible moves by attacking Pokemon
+    move_list = []
+
+    # Lists used to store attack types that are effective on defending pokemon
+
+    # List used to store the attacking type and defending type as tuple (A,D)
+    attackType = []
+    # List used to store corresponding multipliers in simple list to make easily accessible
+    multList = []
+
+    # List which stores all tuples to be output
+    final = []
+
+    # Checking if Attacking Pokemon exists
+    pokeQry = ''' Select * from pokemon p where p.name = %s'''
+    curr.execute(pokeQry,[Attacking_Pokemon_Name])
+    attackpoke = curr.fetchone()
+
+    if(attackpoke is None):
+       print(f"'{Attacking_Pokemon_Name}' isn't a Pokemon that exists.",file=sys.stderr)
+       return
+    
+    # Checking if Defending Pokemon exists
+    pokeQry = ''' Select * from pokemon p where p.name = %s'''
+    curr.execute(pokeQry,[Defending_Pokemon_Name])
+    defendpoke = curr.fetchone()
+
+    if(defendpoke is None):
+       print(f"'{Defending_Pokemon_Name}' isn't a Pokemon that exists.",file=sys.stderr)
+       return
+
+    # Checking if Game exists
+    gameQry = ''' Select * from games g where g.name = %s'''
+    curr.execute(gameQry,[Pokemon_Game_Name])
+    gamepoke = curr.fetchone()
+    if(gamepoke is None):
+        print(f"'Pokemon {Pokemon_Game_Name}' isn't a game in the Pokemon series.",file=sys.stderr)
+        return
+    
+    # Checking if Attacking Pokemon exists in the Game
+    gamepoke = '''select * from pokemon p
+    		  join pokedex on pokedex.national_id = p.id
+    		  join games g on g.id = pokedex.game
+    		  where p.name = %s and g.name = %s'''
+    curr.execute(gamepoke,[Attacking_Pokemon_Name,Pokemon_Game_Name])
+    checkquery = curr.fetchone()
+    if (checkquery is None):
+        print(f"'{Attacking_Pokemon_Name}' doesn't appear in 'Pokemon {Pokemon_Game_Name}'.",file=sys.stderr)
+        return
+     
+    # Checking if Defending Pokemon exists in the Game
+    gamepoke = '''select * from pokemon p
+    		  join pokedex on pokedex.national_id = p.id
+    		  join games g on g.id = pokedex.game
+    		  where p.name = %s and g.name = %s'''
+    curr.execute(gamepoke,[Defending_Pokemon_Name,Pokemon_Game_Name])
+    checkquery = curr.fetchone()
+    if (checkquery is None):
+        print(f"'{Defending_Pokemon_Name}' doesn't appear in 'Pokemon {Pokemon_Game_Name}'.",file=sys.stderr)
+        return
+        
+    # Get details of Defending Pokemon
+    dfndPoke = '''select p.name,p.first_type,p.second_type,p.base_stats from pokemon p where p.name = %s'''
+    curr.execute(dfndPoke,[Defending_Pokemon_Name])
+    
+    defendpoketup = curr.fetchone()
+
+    # Get list of attacking pokemons moves
+    attkPoke = ''' select 
+    			distinct m.name,
+    			m.power,
+    			m.of_type,
+    			p.first_type,
+    			p.second_type,
+    			p.base_stats,
+    			m.category from pokemon p
+		   join learnable_moves l on p.id = l.learnt_by
+	           join moves m on l.learns = m.id
+	           		
+	           where
+	           	p.name = %s
+	           	and l.learnt_in in (select g.id from games g
+	           		where g.name = %s)
+	           	
+	           	and (m.category = 'Physical'
+	           	 
+	           	or m.category = 'Special')
+	           	and m.power is not null
+	           	order by m.name;'''
+    
+    curr.execute(attkPoke, [Attacking_Pokemon_Name,Pokemon_Game_Name])
+    
+    # Loop through Move Query and store possible moves in list
+    for t in curr.fetchall():
+    	move_list.append(t)
+
+    # Checking if the attacking pokemon has any moves to use
+    if(move_list == []):
+        print(f"In 'Pokemon {Pokemon_Game_Name}', '{Attacking_Pokemon_Name}' can't attack '{Defending_Pokemon_Name}'.")
+        return
+
+    # Query to get list of type effectiveness on defending pokemon types
+    typeeffectQry = '''select attacking,defending,multiplier from type_effectiveness
+    			where defending = %s or defending = %s '''
+    
+    curr.execute(typeeffectQry,[defendpoketup[1],defendpoketup[2]])
+    
+    # Loop to go through type_effectiveness query and store in lists
+    for t in curr.fetchall():
+    	attackType.append((t[0],t[1]))
+    	multList.append(t[2])
+
+    # Using helper function to calculate min and max dmg from attacking pokemon to defending pokemon
+    result, alignval,alignmin,alignmax = helpers.calcdmg(attackType, multList,move_list,defendpoketup)
+    
+    # checking if all attacks produce 0 dmg to defending pokemon and printing appropriate output
+    if(result == []):
+        print(f"In 'Pokemon {Pokemon_Game_Name}', '{Attacking_Pokemon_Name}' can't attack '{Defending_Pokemon_Name}'.")
+        return    
+    
+    # Sort our list of tuples {(Move_name, Min Dmg, Max Dmg)} based on max dmg
+    result.sort(key = lambda x:x[2])
+
+    # Temp values used to sort our groups of max dmg by min dmg within each group
+    prev = ('',0,0)
+    temp = []
+
+    # Loop to sort by min dmg within max groups
+    for i,t in enumerate(result):
+        if (prev[2] == 0):
+            temp.append(t)
+        elif (t[2] == prev[2]):
+            temp.append(t)
+        else:
+            temp.sort(key = lambda x:x[1])
+            final.extend(temp)
+            temp = []
+            temp.append(t)
+        if (i == len(result)-1):
+            temp.sort(key = lambda x:x[1])
+            final.extend(temp)
+        prev = t
+        
+    	    
+    
+    # Printing our output
+    print(f"In '{'Pokemon ' + Pokemon_Game_Name}', When '{Attacking_Pokemon_Name}' attacks '{defendpoketup[0]}', '{Attacking_Pokemon_Name}' can use the following moves:\n")
+
+    for t in final:
+    	moveName = "\'" + t[0] + "\'"
+    	print(f"\t{moveName: <{alignval + 2}} for a minimum of{t[1]:>{alignmin}.0f} damage and a maximum of {t[2]:>{alignmax+1}.0f} damage to '{defendpoketup[0]}'.")
+
+
+    print('')
+    db.close()
+
+
+    ...
+
+
+if __name__ == '__main__':
+    try:
+        db = psycopg2.connect(dbname="ass2")
+        main()
+    except psycopg2.Error as err:
+        print("DB error: ", err)
+    except Exception as err:
+        print("Internal Error: ", err)
+        raise err
+    finally:
+        if db is not None:
+            db.close()
+    sys.exit(0)

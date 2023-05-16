@@ -1,0 +1,221 @@
+#! /usr/bin/env python3
+
+
+"""
+COMP3311
+23T1
+Assignment 2
+Pokemon Database
+
+Written by: <YOUR NAME HERE> <YOUR STUDENT ID HERE>
+Written on: <DATE HERE>
+
+Encounter Summary
+
+Print a summary of all the Pokemon that can be encountered at a given location in a given game
+"""
+
+
+import sys
+import psycopg2
+import helpers
+
+
+### Constants
+USAGE = f"Usage: {sys.argv[0]} <Location> <Game>"
+
+
+### Globals
+db = None
+Location = None
+Game = None
+
+
+### Command-line args
+if len(sys.argv) != 3:
+    print(USAGE, file=sys.stderr)
+    sys.exit(1)
+Location = helpers.clean(sys.argv[1])
+Game     = helpers.clean(sys.argv[2])
+
+
+def main():
+    # TODO: YOUR CODE HERE
+    curr = db.cursor()
+
+    typesList = []
+    poke_list = []
+    poke_names = []
+    egg_namelist = []
+    egg_assPoke = []
+    list_egglist = []
+    locations_names = []
+    games_names = []
+    gameslocations = []
+    gamesQry = '''select distinct name from games '''
+    
+    curr.execute(gamesQry)
+    
+    for t in curr.fetchall():
+    	games_names.append(t[0])
+
+    if Game not in games_names:
+    	print(f"'Pokemon {Game}' isn't a game in the Pokemon series.",file=sys.stderr)
+    	return
+
+    locationsQry = '''select distinct name from locations '''
+    
+    curr.execute(locationsQry)
+    
+    for t in curr.fetchall():
+    	locations_names.append(t[0])
+
+    if Location not in locations_names:
+    	print(f"'{Location}' isn't a location in the Pokemon series.",file=sys.stderr)
+    	return
+    	
+    gameslocationsQry = '''select distinct l.name from locations l join games g on l.appears_in = g.id where g.name = %s '''
+    
+    curr.execute(gameslocationsQry,[Game])
+    
+    for t in curr.fetchall():
+    	gameslocations.append(t[0])
+
+    if Location not in gameslocations:
+    	print(f"'{Location}' isn't in 'Pokemon {Game}'.",file=sys.stderr)
+    	return
+
+
+    typesQry = ''' select * from types order by id'''
+
+    curr.execute(typesQry)
+
+    for t in curr.fetchall():
+        typesList.append(t[1])
+    
+    out = '^' + Location + '$'
+
+    Qry ='''select 
+                pokemon_name,
+                first_type,
+                second_type,
+                rarity,
+                levels,
+                encounter_id,
+                er.requirement,
+                er.inverted,
+                r.assertion,
+                location_name
+            from encounter_pokemon e
+            join encounter_requirements er on e.encounter_id = er.encounter
+            join requirements r on er.requirement = r.id
+            where game_name = %s
+                and location_name ~* %s
+            order by rarity desc,pokemon_name,levels, r.assertion;
+        '''
+
+    list_reqlist = []
+    req_list = []
+    encounter_list = []
+    curr.execute(Qry,[Game,out])
+    prev = ('',)
+    for t in curr.fetchall():
+
+        if (prev[0] == ''):
+            local = t[9]
+            encounter_list.append(t[5])
+            poke_names.append(t[0])
+            req_list.append(helpers.invertReqs(t))
+            poke_list.append(t)
+        elif(t[5] == prev[5]):
+            req_list.append(helpers.invertReqs(t))
+        else:
+            poke_list.append(t)
+            list_reqlist.append(req_list)
+            req_list = []
+            encounter_list.append(t[5])
+            if(t[0] != prev[0]):
+                poke_names.append(t[0])
+            req_list.append(helpers.invertReqs(t))
+        
+
+        prev = t
+    list_reqlist.append(req_list)
+    tup_poke = tuple(poke_names)
+    
+    abilityQry = '''select p.name as pokemon_name, a.name as ability from pokemon p
+                    join knowable_abilities k on k.known_by = p.id
+                    join abilities a on a.id = k.knows
+                    where p.name in %s and k.hidden is False
+                    order by p.name, a.name; '''
+
+    curr.execute(abilityQry,[tup_poke])
+
+    list_abillist = []
+    abil_namelist = []
+    abil_asspoke = []
+    prev = ('',)
+    for t in curr.fetchall():
+        if (prev[0] == ''):
+            abil_namelist.append(t[1])
+            abil_asspoke.append(t[0])
+        elif (t[0] == prev[0]):
+            abil_namelist.append(t[1])
+        else:
+            list_abillist.append(abil_namelist)
+            abil_namelist = []
+            abil_asspoke.append(t[0])
+            abil_namelist.append(t[1])
+        prev = t
+    list_abillist.append(abil_namelist)
+
+    eggQry = '''select p.name as pokemon_name, e.name as egg_name from pokemon p
+                join in_group i on p.id = i.pokemon
+                join egg_groups e on i.egg_group = e.id
+                where p.name in %s; '''
+
+    curr.execute(eggQry, [tup_poke])
+
+    prev = ('',)
+    for t in curr.fetchall():
+        if (prev[0] == ''):
+            egg_namelist.append(t[1])
+            egg_assPoke.append(t[0])
+        elif (t[0] == prev[0]):
+            egg_namelist.append(t[1])
+        else:
+            list_egglist.append(egg_namelist)
+            egg_namelist = []
+            egg_assPoke.append(t[0])
+            egg_namelist.append(t[1])
+        prev = t
+    list_egglist.append(egg_namelist)
+
+
+    print(f"In 'Pokemon {Game}' at '{local}' the following Pokemon can be Encountered:\n")
+    for t,val in enumerate(poke_list):
+        print(f"\t{val[0]}:")
+        helpers.print_types(typesList,val[1],val[2])
+        print(f"\t\tRarity: {val[3]}%")
+        helpers.level_split(val[4])
+        helpers.egg_out(list_egglist,egg_assPoke,val[0])
+        helpers.abil_out(list_abillist,abil_asspoke,val[0])
+        helpers.requirements_out(list_reqlist,encounter_list,val[5])
+        print('')
+    db.close()
+    ...
+
+
+if __name__ == '__main__':
+    try:
+        db = psycopg2.connect(dbname="ass2")
+        main()
+    except psycopg2.Error as err:
+        print("DB error: ", err)
+    except Exception as err:
+        print("Internal Error: ", err)
+        raise err
+    finally:
+        if db is not None:
+            db.close()
+    sys.exit(0)
